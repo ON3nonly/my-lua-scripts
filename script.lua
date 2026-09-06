@@ -5,107 +5,118 @@ local Workspace = game:GetService("Workspace")
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
-local BASE_POSITION = Vector3.new(0, 50, 0)
-
--- Create ScreenGui Container
+-- UI Container Setup
 local screenGui = Instance.new("ScreenGui")
-screenGui.Name = "StealEggUI"
+screenGui.Name = "StealEggUI_Fixed"
 screenGui.ResetOnSpawn = false
 screenGui.Parent = PlayerGui
 
--- Main Interface Window
 local mainFrame = Instance.new("Frame")
 mainFrame.Name = "MainFrame"
-mainFrame.Size = UDim2.new(0, 220, 0, 160)
-mainFrame.Position = UDim2.new(0.5, -110, 0.4, -80)
-mainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+mainFrame.Size = UDim2.new(0, 230, 0, 160)
+mainFrame.Position = UDim2.new(0.5, -115, 0.4, -80)
+mainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
 mainFrame.BorderSizePixel = 0
 mainFrame.Active = true
 mainFrame.Draggable = true
 mainFrame.Parent = screenGui
 
-local uiCorner = Instance.new("UICorner")
-uiCorner.CornerRadius = UDim.new(0, 8)
-uiCorner.Parent = mainFrame
+local mainCorner = Instance.new("UICorner")
+mainCorner.CornerRadius = UDim.new(0, 8)
+mainCorner.Parent = mainFrame
 
--- Title
 local titleLabel = Instance.new("TextLabel")
-titleLabel.Name = "Title"
 titleLabel.Size = UDim2.new(1, 0, 0, 35)
 titleLabel.BackgroundTransparency = 1
-titleLabel.Text = "Steal An Egg GUI"
+titleLabel.Text = "Steal An Egg GUI (Fixed)"
 titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-titleLabel.TextSize = 16
+titleLabel.TextSize = 15
 titleLabel.Font = Enum.Font.SourceSansBold
 titleLabel.Parent = mainFrame
 
--- Button 1: Steal & Teleport
 local stealButton = Instance.new("TextButton")
-stealButton.Name = "StealButton"
 stealButton.Size = UDim2.new(0.85, 0, 0, 35)
 stealButton.Position = UDim2.new(0.075, 0, 0.28, 0)
 stealButton.BackgroundColor3 = Color3.fromRGB(0, 120, 215)
 stealButton.Text = "Instant Steal & TP"
 stealButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-stealButton.TextSize = 14
 stealButton.Font = Enum.Font.SourceSans
+stealButton.TextSize = 14
 stealButton.Parent = mainFrame
 
 local stealCorner = Instance.new("UICorner")
 stealCorner.CornerRadius = UDim.new(0, 6)
 stealCorner.Parent = stealButton
 
--- Button 2: Teleport Base Only
 local tpButton = Instance.new("TextButton")
-tpButton.Name = "TPButton"
 tpButton.Size = UDim2.new(0.85, 0, 0, 35)
 tpButton.Position = UDim2.new(0.075, 0, 0.60, 0)
 tpButton.BackgroundColor3 = Color3.fromRGB(40, 160, 80)
-tpButton.Text = "Teleport To Base"
+tpButton.Text = "Set / Teleport Base"
 tpButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-tpButton.TextSize = 14
 tpButton.Font = Enum.Font.SourceSans
+tpButton.TextSize = 14
 tpButton.Parent = mainFrame
 
 local tpCorner = Instance.new("UICorner")
 tpCorner.CornerRadius = UDim.new(0, 6)
 tpCorner.Parent = tpButton
 
--- Mechanics Functions
-local function teleportToBase()
+-- Execution Mechanics
+local savedBaseCFrame = nil
+
+local function getRoot()
     local char = LocalPlayer.Character
-    if char and char:FindFirstChild("HumanoidRootPart") then
-        char.HumanoidRootPart.CFrame = CFrame.new(BASE_POSITION)
+    return char and char:FindFirstChild("HumanoidRootPart")
+end
+
+local function handleTeleport()
+    local root = getRoot()
+    if root then
+        if not savedBaseCFrame then
+            savedBaseCFrame = root.CFrame
+        else
+            root.CFrame = savedBaseCFrame
+        end
     end
 end
 
-local function stealHighestRarityEgg()
-    local targetEgg = nil
-    local highestRarityValue = -1
+local function executeSteal()
+    local root = getRoot()
+    if not root then return end
 
-    local eggsFolder = Workspace:FindFirstChild("Eggs") or Workspace:FindFirstChild("EggSpawns")
-    if eggsFolder then
-        for _, egg in ipairs(eggsFolder:GetChildren()) do
-            local rarityAttr = egg:GetAttribute("Rarity") or (egg:FindFirstChild("Rarity") and egg.Rarity.Value)
-            if rarityAttr and type(rarityAttr) == "number" and rarityAttr > highestRarityValue then
-                highestRarityValue = rarityAttr
-                targetEgg = egg
+    -- Save base position on first run
+    if not savedBaseCFrame then
+        savedBaseCFrame = root.CFrame
+    end
+
+    -- Trigger Proximity Prompts in workspace
+    for _, prompt in ipairs(Workspace:GetDescendants()) do
+        if prompt:IsA("ProximityPrompt") then
+            if fireproximityprompt then
+                fireproximityprompt(prompt)
+            else
+                prompt:InputHoldBegin()
+                task.wait(prompt.HoldDuration)
+                prompt:InputHoldEnd()
             end
         end
     end
 
-    local stealRemote = ReplicatedStorage:FindFirstChild("StealEgg", true) or ReplicatedStorage:FindFirstChild("InteractRemote", true)
-    if stealRemote and stealRemote:IsA("RemoteEvent") then
-        if targetEgg then
-            stealRemote:FireServer(targetEgg)
-        else
-            stealRemote:FireServer()
+    -- Fire direct Network Remotes
+    for _, remote in ipairs(ReplicatedStorage:GetDescendants()) do
+        if remote:IsA("RemoteEvent") then
+            local name = remote.Name:lower()
+            if name:find("steal") or name:find("egg") or name:find("claim") or name:find("grab") or name:find("interact") then
+                remote:FireServer()
+            end
         end
-        task.wait(0.05)
-        teleportToBase()
     end
+
+    -- Return to saved base location
+    task.wait(0.05)
+    handleTeleport()
 end
 
--- Event Listeners
-stealButton.MouseButton1Click:Connect(stealHighestRarityEgg)
-tpButton.MouseButton1Click:Connect(teleportToBase)
+stealButton.MouseButton1Click:Connect(executeSteal)
+tpButton.MouseButton1Click:Connect(handleTeleport)
