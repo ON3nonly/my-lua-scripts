@@ -1,178 +1,415 @@
--- 🎨 UI SETUP (FIXED FOR DELTA)
-local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "DeltaRarityUI"
-ScreenGui.Parent = game.Players.LocalPlayer:WaitForChild("PlayerGui") -- Fixed: Parent to PlayerGui
-ScreenGui.ResetOnSpawn = false -- Fixed: Keeps UI after death
-ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+-- ============================================================================
+-- EGG THIEF DELTA - UNIFIED SCRIPT
+-- Features: Rarity Scanner, Auto-Tween, Priority Steal, UI with Selector
+-- Keybind: T (Toggle UI)
+-- ============================================================================
 
--- Background Panel
-local Frame = Instance.new("Frame")
-Frame.Name = "Panel"
-Frame.Size = UDim2.new(0, 300, 0, 150)
-Frame.Position = UDim2.new(0.5, -150, 0.5, -75)
-Frame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
-Frame.BorderSizePixel = 0
-Frame.Parent = ScreenGui
-
--- Title
-local Title = Instance.new("TextLabel")
-Title.Name = "Title"
-Title.Size = UDim2.new(1, 0, 0, 30)
-Title.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
-Title.Text = "🎯 Secret/Eternal/Divine Stealer"
-Title.TextColor3 = Color3.fromRGB(255, 255, 255)
-Title.Font = Enum.Font.Gothen
-Title.TextSize = 14
-Title.Parent = Frame
-
--- Status Label
-local StatusLabel = Instance.new("TextLabel")
-StatusLabel.Name = "Status"
-StatusLabel.Size = UDim2.new(1, -20, 0, 20)
-StatusLabel.Position = UDim2.new(0, 10, 0, 40)
-StatusLabel.BackgroundTransparency = 1
-StatusLabel.Text = "Status: Scanning..."
-StatusLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
-StatusLabel.Font = Enum.Font.Code
-StatusLabel.TextSize = 12
-StatusLabel.Parent = Frame
-
--- Last Stolen Label
-local LastStolenLabel = Instance.new("TextLabel")
-LastStolenLabel.Name = "LastStolen"
-LastStolenLabel.Size = UDim2.new(1, -20, 0, 20)
-LastStolenLabel.Position = UDim2.new(0, 10, 0, 65)
-LastStolenLabel.BackgroundTransparency = 1
-LastStolenLabel.Text = "Last Stolen: None"
-LastStolenLabel.TextColor3 = Color3.fromRGB(255, 255, 100)
-LastStolenLabel.Font = Enum.Font.Code
-LastStolenLabel.TextSize = 12
-LastStolenLabel.Parent = Frame
-
--- Toggle Button
-local ToggleBtn = Instance.new("TextButton")
-ToggleBtn.Name = "Toggle"
-ToggleBtn.Size = UDim2.new(0, 100, 0, 30)
-ToggleBtn.Position = UDim2.new(0.5, -50, 1, -30)
-ToggleBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
-ToggleBtn.Text = "PAUSE"
-ToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-ToggleBtn.Font = Enum.Font.Bold
-ToggleBtn.TextSize = 12
-ToggleBtn.Parent = Frame
-
--- UI State
-local isPaused = false
-ToggleBtn.MouseButton1Click:Connect(function()
-    isPaused = not isPaused
-    ToggleBtn.Text = isPaused and "RESUME" or "PAUSE"
-    StatusLabel.Text = isPaused and "Status: Paused" or "Status: Scanning..."
-    StatusLabel.TextColor3 = isPaused and Color3.fromRGB(255, 0, 0) or Color3.fromRGB(0, 255, 0)
-end)
-
--- Helper function to update UI
-local function updateUI(status, msg)
-    if isPaused and status ~= "Paused" then return end
-    StatusLabel.Text = "Status: " .. status
-    if msg then
-        LastStolenLabel.Text = "Last Stolen: " .. msg
-        LastStolenLabel.TextColor3 = Color3.fromRGB(0, 255, 255)
-        task.wait(1) -- Use task.wait instead of wait
-        LastStolenLabel.TextColor3 = Color3.fromRGB(255, 255, 100)
-    end
-end
-
--- 1. Get Services
-local LocalPlayer = game:GetService("Players").LocalPlayer
+local GameService = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
 
--- 2. Define Target RARITIES ONLY (Secret, Eternal, Divine)
-local TargetRarities = {
-    "Secret", 
-    "Eternal", 
-    "Divine"
+-- --------------------------------------------------------------------------
+-- CONFIGURATION
+-- --------------------------------------------------------------------------
+local Config = {
+    HomeCoordinate = Vector3.new(0, 10, 0), -- Change this to your safe zone/home
+    TweenSpeed = 25, -- Higher is faster
+    Cooldown = 2, -- Seconds between attempts if target not found
+    ToggleKey = Enum.KeyCode.T,
+    DefaultRarity = "Secret"
 }
 
--- 3. Check if Item is Target Rarity
-local function isTargetRarity(item)
-    if not item or not item:IsA("Tool") then return false end
-    
-    -- Check Attribute first (modern games)
-    local rarity = item:GetAttribute("Rarity") or ""
-    
-    -- Fallback to Name if Attribute is missing
-    if rarity == "" then
-        rarity = item.Name
-    end
-    
-    -- Check if any target rarity is in the string
-    for _, target in pairs(TargetRarities) do
-        if rarity:lower():find(target:lower(), 1, true) then
-            return true
-        end
+-- --------------------------------------------------------------------------
+-- MODULE 1: EGG SCANNER
+-- --------------------------------------------------------------------------
+local EggScanner = {
+    log = {},
+    rarityTiers = {
+        ["Secret"] = 1,
+        ["Eternal"] = 2,
+        ["Divine"] = 3,
+        ["Legendary"] = 4,
+        ["Rare"] = 5,
+        ["Uncommon"] = 6,
+        ["Common"] = 7
+    },
+    selectedRarity = Config.DefaultRarity,
+    startTime = os.time()
+}
+
+-- Session Stats
+local Stats = {
+    totalSteals = 0,
+    secretCount = 0,
+    eternalCount = 0,
+    divineCount = 0,
+    otherCount = 0
+}
+
+function EggScanner:SetTargetRarity(rarity)
+    if self.rarityTiers[rarity] then
+        self.selectedRarity = rarity
+        print("[SCANNER] Target Rarity set to: " .. rarity)
+        return true
     end
     return false
 end
 
--- 4. Tween Animation Function (Fixed)
-local function animateSteal(item, targetPlayer)
-    local char = targetPlayer.Character
-    if not char then return end
-    
-    local rootPart = char:FindFirstChild("HumanoidRootPart")
-    if not rootPart then return end
-    
-    local handle = item:FindFirstChild("Handle") or item:FindFirstChild("MeshPart") or item
-    
-    local myChar = LocalPlayer.Character
-    -- ✅ FIXED: Added check for myRoot to prevent error
-    local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
-    if not myRoot then return end 
-    
-    -- Tween the item to your character's head or root
-    local tweenInfo = TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-    local tweenGoal = {
-        Position = myRoot.Position + Vector3.new(0, 2, 0) -- Move to above your head
-    }
-    
-    local tween = TweenService:Create(handle, tweenInfo, tweenGoal)
-    tween:Play()
-    
-    print("✅ Animated " .. item.Name .. " to your character")
+function EggScanner:IdentifyRarity(objectName)
+    local name = string.upper(objectName)
+    if string.find(name, "SECRET") then return "Secret" end
+    if string.find(name, "ETERNAL") then return "Eternal" end
+    if string.find(name, "DIVINE") then return "Divine" end
+    if string.find(name, "LEGENDARY") then return "Legendary" end
+    if string.find(name, "RARE") then return "Rare" end
+    if string.find(name, "UNCOMMON") then return "Uncommon" end
+    return "Common"
 end
 
--- 5. Main Loop: Steal Items
-while true do
-    task.wait(0.5) -- Check every half second
-    
-    if not isPaused then
-        -- Get Character
-        local char = LocalPlayer.Character
-        if not char then task.wait() continue end
-        
-        local myRoot = char:FindFirstChild("HumanoidRootPart")
-        if not myRoot then task.wait() continue end
-        
-        -- Scan Backpack
-        local backpack = LocalPlayer:WaitForChild("Backpack")
-        for _, tool in pairs(backpack:GetChildren()) do
-            if isTargetRarity(tool) then
-                updateUI("Found", tool.Name)
-                animateSteal(tool, LocalPlayer)
-                -- Optional: You can add logic here to "steal" it from others if needed
-            end
-        end
-        
-        -- Scan Character Inventory (Equipped items)
-        for _, tool in pairs(char:GetChildren()) do
-            if tool:IsA("Tool") and isTargetRarity(tool) then
-                -- Avoid double counting if it's also in backpack
-                if not backpack:FindFirstChild(tool.Name) then
-                    updateUI("Equipped", tool.Name)
-                    animateSteal(tool, LocalPlayer)
+function EggScanner:ScanForNewEggs()
+    local newEggs = {}
+    local targetTier = self.rarityTiers[self.selectedRarity] or 7
+
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if obj:IsA("BasePart") or obj:IsA("Model") then
+            local name = tostring(obj.Name)
+            local rarity = self:IdentifyRarity(name)
+            local objectTier = self.rarityTiers[rarity] or 7
+
+            -- Only process if it meets or exceeds our target rarity
+            if objectTier <= targetTier then
+                -- Check if already logged
+                local isKnown = false
+                for _, logEntry in ipairs(self.log) do
+                    if logEntry.objectID == obj:GetUniqueId() then
+                        isKnown = true
+                        break
+                    end
+                end
+
+                if not isKnown then
+                    local logEntry = {
+                        objectName = name,
+                        rarity = rarity,
+                        objectID = obj:GetUniqueId(),
+                        object = obj,
+                        position = obj.Position
+                    }
+                    table.insert(self.log, logEntry)
+                    table.insert(newEggs, logEntry)
+                    print("[SCANNER] New Egg: " .. name .. " [" .. rarity .. "]")
                 end
             end
         end
     end
+    return newEggs
 end
+
+function EggScanner:GetHighestRarityEgg()
+    if #self.log == 0 then return nil end
+
+    -- Sort by rarity (lower number = higher priority)
+    table.sort(self.log, function(a, b)
+        return self.rarityTiers[a.rarity] < self.rarityTiers[b.rarity]
+    end)
+
+    return self.log[1]
+end
+
+function EggScanner:RemoveEggFromLog(objectID)
+    for i, entry in ipairs(self.log) do
+        if entry.objectID == objectID then
+            table.remove(self.log, i)
+            break
+        end
+    end
+end
+
+-- --------------------------------------------------------------------------
+-- MODULE 2: TWEEN PATHFINDER
+-- --------------------------------------------------------------------------
+local TweenPathfinder = {
+    currentSpeed = Config.TweenSpeed
+}
+
+function TweenPathfinder:GetCharacter()
+    local player = GameService.LocalPlayer
+    if player and player.Character then
+        return player.Character
+    end
+    return nil
+end
+
+function TweenPathfinder:TweenToTarget(targetEntity)
+    local character = self:GetCharacter()
+    if not character or not targetEntity then return false end
+
+    local rootPart = character:FindFirstChild("HumanoidRootPart") or character:FindFirstChild("Head")
+    if not rootPart then return false end
+
+    local startPos = rootPart.Position
+    local endPos = targetEntity.Position + Vector3.new(0, 2, 0) -- Offset to pick up item
+
+    -- Basic Obstacle Check
+    local raycastParams = RaycastParams.new()
+    raycastParams.FilterDescendantsInstances = {character}
+    raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+    
+    local direction = (endPos - startPos).Unit * (endPos - startPos).Magnitude
+    local raycastResult = Workspace:Raycast(startPos, direction, raycastParams)
+
+    if raycastResult and raycastResult.Instance ~= targetEntity then
+        print("[PATHFINDER] Path blocked by: " .. tostring(raycastResult.Instance.Name))
+        return false
+    end
+
+    local duration = startPos:Distance(endPos) / self.currentSpeed
+    local tweenInfo = TweenInfo.new(duration, Enum.EasingStyle.Linear, Enum.EasingDirection.Out)
+    local tween = TweenService:Create(rootPart, tweenInfo, {Position = endPos})
+    
+    tween:Play()
+    tween.Completed:Wait()
+    
+    -- Return to home after successful retrieval
+    self:TweenToHome()
+    return true
+end
+
+function TweenPathfinder:TweenToHome()
+    local character = self:GetCharacter()
+    if not character then return false end
+
+    local rootPart = character:FindFirstChild("HumanoidRootPart") or character:FindFirstChild("Head")
+    if not rootPart then return false end
+
+    local startPos = rootPart.Position
+    local endPos = Config.HomeCoordinate
+    local duration = startPos:Distance(endPos) / self.currentSpeed
+
+    local tweenInfo = TweenInfo.new(duration, Enum.EasingStyle.Linear, Enum.EasingDirection.Out)
+    local tween = TweenService:Create(rootPart, tweenInfo, {Position = endPos})
+    tween:Play()
+    tween.Completed:Wait()
+    return true
+end
+
+-- --------------------------------------------------------------------------
+-- MODULE 3: PRIORITY STEALER
+-- --------------------------------------------------------------------------
+local PriorityStealer = {}
+
+function PriorityStealer:StartLoop()
+    print("[STEALER] Loop started.")
+    while true do
+        local bestEgg = EggScanner:GetHighestRarityEgg()
+        
+        if bestEgg then
+            print("[STEALER] Targeting: " .. bestEgg.objectName .. " [" .. bestEgg.rarity .. "]")
+            local success = TweenPathfinder:TweenToTarget(bestEgg.object)
+            
+            if success then
+                -- Log Stats
+                Stats.totalSteals = Stats.totalSteals + 1
+                if bestEgg.rarity == "Secret" then Stats.secretCount = Stats.secretCount + 1
+                elseif bestEgg.rarity == "Eternal" then Stats.eternalCount = Stats.eternalCount + 1
+                elseif bestEgg.rarity == "Divine" then Stats.divineCount = Stats.divineCount + 1
+                else Stats.otherCount = Stats.otherCount + 1
+                end
+                
+                print("[STEALER] Successfully stole: " .. bestEgg.objectName)
+                EggScanner:RemoveEggFromLog(bestEgg.objectID)
+            else
+                print("[STEALER] Failed to reach target: " .. bestEgg.objectName)
+            end
+        else
+            task.wait(1) -- Wait if no eggs found
+        end
+        
+        task.wait(Config.Cooldown)
+    end
+end
+
+-- --------------------------------------------------------------------------
+-- MODULE 4: UI OVERLAY
+-- --------------------------------------------------------------------------
+local UIOverlay = {
+    visible = true
+}
+
+function UIOverlay:CreatePanel()
+    local player = GameService.LocalPlayer
+    if not player then return end
+    
+    local playerGui = player:WaitForChild("PlayerGui")
+    
+    -- Main Container
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "EggThiefUI"
+    screenGui.ResetOnSpawn = false
+    screenGui.Parent = playerGui
+    
+    local frame = Instance.new("Frame")
+    frame.Name = "MainFrame"
+    frame.Size = UDim2.new(0, 250, 0, 480)
+    frame.Position = UDim2.new(0, 10, 0, 10)
+    frame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+    frame.BorderSizePixel = 0
+    frame.Parent = screenGui
+    
+    -- Title
+    local title = Instance.new("TextLabel")
+    title.Name = "Title"
+    title.Size = UDim2.new(1, 0, 0, 30)
+    title.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    title.Text = "Egg Thief v2.0"
+    title.TextColor3 = Color3.new(1, 1, 1)
+    title.TextSize = 16
+    title.Font = Enum.Font.GothamBold
+    title.Parent = frame
+    
+    -- Target Label
+    local targetLabel = Instance.new("TextLabel")
+    targetLabel.Name = "TargetLabel"
+    targetLabel.Size = UDim2.new(1, -10, 0, 25)
+    targetLabel.Position = UDim2.new(0, 5, 0, 35)
+    targetLabel.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+    targetLabel.Text = "Target: Secret"
+    targetLabel.TextColor3 = Color3.new(1, 0.8, 0) -- Orange
+    targetLabel.TextSize = 14
+    targetLabel.Font = Enum.Font.GothamBold
+    targetLabel.Parent = frame
+    
+    -- Rarity Buttons Container
+    local buttonContainer = Instance.new("ScrollingFrame")
+    buttonContainer.Name = "RarityButtons"
+    buttonContainer.Size = UDim2.new(1, -10, 0, 220)
+    buttonContainer.Position = UDim2.new(0, 5, 0, 65)
+    buttonContainer.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    buttonContainer.BorderSizePixel = 0
+    buttonContainer.ScrollBarThickness = 5
+    buttonContainer.Parent = frame
+    
+    local listLayout = Instance.new("UIGridLayout")
+    listLayout.Name = "ListLayout"
+    listLayout.CellSize = UDim2.new(0, 110, 0, 30)
+    listLayout.Padding = UDim2.new(0, 0, 0, 5)
+    listLayout.Parent = buttonContainer
+    
+    -- Create Buttons
+    local rarities = {"Secret", "Eternal", "Divine", "Legendary", "Rare", "Uncommon", "Common"}
+    
+    for _, rarity in ipairs(rarities) do
+        local btn = Instance.new("TextButton")
+        btn.Name = rarity .. "Button"
+        btn.Size = UDim2.new(0, 100, 0, 25)
+        btn.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+        btn.Text = rarity
+        btn.TextColor3 = Color3.new(1, 1, 1)
+        btn.TextSize = 14
+        btn.Font = Enum.Font.GothamBold
+        btn.Parent = buttonContainer
+        
+        btn.MouseButton1Click:Connect(function()
+            -- Update Scanner
+            EggScanner:SetTargetRarity(rarity)
+            
+            -- Update UI Label
+            targetLabel.Text = "Target: " .. rarity
+            
+            -- Reset all buttons
+            for _, child in ipairs(buttonContainer:GetChildren()) do
+                if child:IsA("TextButton") then
+                    child.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+                    child.TextColor3 = Color3.new(1, 1, 1)
+                end
+            end
+            -- Highlight selected
+            btn.BackgroundColor3 = Color3.fromRGB(0, 120, 255)
+            btn.TextColor3 = Color3.new(1, 1, 1)
+        end)
+    end
+    
+    -- Status Label
+    local statusLabel = Instance.new("TextLabel")
+    statusLabel.Name = "StatusLabel"
+    statusLabel.Size = UDim2.new(1, -10, 0, 30)
+    statusLabel.Position = UDim2.new(0, 5, 0, 290)
+    statusLabel.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+    statusLabel.Text = "Scanning..."
+    statusLabel.TextColor3 = Color3.new(0, 1, 1) -- Cyan
+    statusLabel.TextSize = 14
+    statusLabel.Parent = frame
+    
+    -- Stats Label
+    local statsLabel = Instance.new("TextLabel")
+    statsLabel.Name = "StatsLabel"
+    statsLabel.Size = UDim2.new(1, -10, 0, 70)
+    statsLabel.Position = UDim2.new(0, 5, 0, 325)
+    statsLabel.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+    statsLabel.Text = "Steals: 0"
+    statsLabel.TextColor3 = Color3.new(0.5, 1, 0.5) -- Green
+    statsLabel.TextSize = 12
+    statsLabel.Parent = frame
+    
+    -- Keybind Toggle
+    UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        if gameProcessed then return end
+        if input.KeyCode == Config.ToggleKey then
+            screenGui.Enabled = not screenGui.Enabled
+        end
+    end)
+    
+    -- Update Loop
+    spawn(function()
+        while true do
+            if screenGui.Enabled then
+                -- Update Status
+                local currentTarget = EggScanner:GetHighestRarityEgg()
+                if currentTarget then
+                    statusLabel.Text = "Target: " .. currentTarget.objectName .. " [" .. currentTarget.rarity .. "]"
+                else
+                    statusLabel.Text = "Searching for " .. EggScanner.selectedRarity .. " eggs..."
+                end
+                
+                -- Update Stats
+                local runtime = os.time() - EggScanner.startTime
+                statsLabel.Text = string.format(
+                    "Steals: %d\nS:%d E:%d D:%d\nRuntime: %ds",
+                    Stats.totalSteals,
+                    Stats.secretCount,
+                    Stats.eternalCount,
+                    Stats.divineCount,
+                    runtime
+                )
+            end
+            task.wait(1)
+        end
+    end)
+end
+
+-- --------------------------------------------------------------------------
+-- MAIN INITIALIZATION
+-- --------------------------------------------------------------------------
+
+-- Initialize UI
+UIOverlay:CreatePanel()
+
+-- Initialize Pathfinder
+TweenPathfinder.currentSpeed = Config.TweenSpeed
+
+-- Start Stealer Loop
+spawn(function()
+    PriorityStealer:StartLoop()
+end)
+
+-- Start Scanner Loop
+spawn(function()
+    while true do
+        EggScanner:ScanForNewEggs()
+        task.wait(5) -- Scan every 5 seconds
+    end
+end)
+
+print("[EGG THIEF] Initialized. Press " .. Config.ToggleKey.Name .. " to toggle UI.")
