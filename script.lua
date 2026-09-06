@@ -1,8 +1,12 @@
 -- 🎨 UI SETUP
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "DeltaRarityUI"
-ScreenGui.Parent = game:GetService("CoreGui")
+-- ✅ CHANGE 1: Parent to PlayerGui instead of CoreGui
+ScreenGui.Parent = game.Players.LocalPlayer:WaitForChild("PlayerGui")
+-- ✅ CHANGE 2: Keep UI visible after death/respawn
+ScreenGui.ResetOnSpawn = false
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
 
 -- Background Panel
 local Frame = Instance.new("Frame")
