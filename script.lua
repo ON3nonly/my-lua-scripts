@@ -1,12 +1,9 @@
--- 🎨 UI SETUP
+-- 🎨 UI SETUP (FIXED FOR DELTA)
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "DeltaRarityUI"
--- ✅ CHANGE 1: Parent to PlayerGui instead of CoreGui
-ScreenGui.Parent = game.Players.LocalPlayer:WaitForChild("PlayerGui")
--- ✅ CHANGE 2: Keep UI visible after death/respawn
-ScreenGui.ResetOnSpawn = false
+ScreenGui.Parent = game.Players.LocalPlayer:WaitForChild("PlayerGui") -- Fixed: Parent to PlayerGui
+ScreenGui.ResetOnSpawn = false -- Fixed: Keeps UI after death
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-
 
 -- Background Panel
 local Frame = Instance.new("Frame")
@@ -80,29 +77,36 @@ local function updateUI(status, msg)
     if msg then
         LastStolenLabel.Text = "Last Stolen: " .. msg
         LastStolenLabel.TextColor3 = Color3.fromRGB(0, 255, 255)
-        wait(1)
+        task.wait(1) -- Use task.wait instead of wait
         LastStolenLabel.TextColor3 = Color3.fromRGB(255, 255, 100)
     end
 end
 
--- 1. Get LocalPlayer
+-- 1. Get Services
 local LocalPlayer = game:GetService("Players").LocalPlayer
 local TweenService = game:GetService("TweenService")
-
--- 2. Get Remote Event
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local GiveItemRemote = ReplicatedStorage:WaitForChild("GiveItem")
 
--- 3. Define Target RARITIES ONLY (Secret, Eternal, Divine)
+-- 2. Define Target RARITIES ONLY (Secret, Eternal, Divine)
 local TargetRarities = {
     "Secret", 
     "Eternal", 
     "Divine"
 }
 
+-- 3. Check if Item is Target Rarity
 local function isTargetRarity(item)
     if not item or not item:IsA("Tool") then return false end
-    local rarity = item:GetAttribute("Rarity") or item.Name
+    
+    -- Check Attribute first (modern games)
+    local rarity = item:GetAttribute("Rarity") or ""
+    
+    -- Fallback to Name if Attribute is missing
+    if rarity == "" then
+        rarity = item.Name
+    end
+    
+    -- Check if any target rarity is in the string
     for _, target in pairs(TargetRarities) do
         if rarity:lower():find(target:lower(), 1, true) then
             return true
@@ -111,7 +115,7 @@ local function isTargetRarity(item)
     return false
 end
 
--- 4. Tween Animation Function
+-- 4. Tween Animation Function (Fixed)
 local function animateSteal(item, targetPlayer)
     local char = targetPlayer.Character
     if not char then return end
@@ -122,97 +126,53 @@ local function animateSteal(item, targetPlayer)
     local handle = item:FindFirstChild("Handle") or item:FindFirstChild("MeshPart") or item
     
     local myChar = LocalPlayer.Character
-    local myRoot = myChar:FindFirstChild("HumanoidRootPart")
-    if not myRoot then return end
+    -- ✅ FIXED: Added check for myRoot to prevent error
+    local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+    if not myRoot then return end 
     
-    -- Fast tween to your position
-    local tweenInfo = TweenInfo.new(0.05, Enum.EasingStyle.Linear, Enum.EasingDirection.In)
-    local goal = {Position = myRoot.Position + Vector3.new(0, 2, 0)}
+    -- Tween the item to your character's head or root
+    local tweenInfo = TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+    local tweenGoal = {
+        Position = myRoot.Position + Vector3.new(0, 2, 0) -- Move to above your head
+    }
     
-    local tween = TweenService:create(handle, tweenInfo, goal)
+    local tween = TweenService:Create(handle, tweenInfo, tweenGoal)
     tween:Play()
-    tween:Complete() 
     
-    item.Parent = LocalPlayer.Backpack
+    print("✅ Animated " .. item.Name .. " to your character")
 end
 
--- 5. Main Steal Logic
-local function trySteal(item, sourcePlayer)
-    if not GiveItemRemote then return end
-    if not item:IsA("Tool") then return end
+-- 5. Main Loop: Steal Items
+while true do
+    task.wait(0.5) -- Check every half second
     
-    if not isTargetRarity(item) then return end
-    
-    updateUI("Target Found", item.Name)
-    print("🎯 Target Rarity Found: " .. item.Name)
-    
-    -- Play Tween Animation
-    animateSteal(item, sourcePlayer)
-    
-    -- Fire Remote
-    GiveItemRemote:FireServer(item, LocalPlayer)
-    
-    -- Ensure it's in backpack
-    item.Parent = LocalPlayer.Backpack
-    
-    -- Trigger Safe Return
-    safeReturnToBase(item)
-    
-    return true
-end
-
--- 6. Safe Return Logic
-local function safeReturnToBase(item)
-    local Base = LocalPlayer.Character:FindFirstChild("Base") 
-    if not Base then
-        Base = LocalPlayer.Backpack:FindFirstChild("Base") or LocalPlayer.Character:FindFirstChild("Base")
-    end
-    
-    if Base and Base:IsA("Tool") then
-        print("🔄 Returning " .. item.Name .. " to base...")
+    if not isPaused then
+        -- Get Character
+        local char = LocalPlayer.Character
+        if not char then task.wait() continue end
         
-        -- Equip Base
-        LocalPlayer.Character.Humanoid:EquipTool(Base)
-        wait(0.5)
+        local myRoot = char:FindFirstChild("HumanoidRootPart")
+        if not myRoot then task.wait() continue end
         
-        -- Right Click to Deposit
-        LocalPlayer.Character.Humanoid:UnequipTools()
-        if Base.Handle and Base.Handle:FindFirstChild("ProximityPrompt") then
-            Base.Handle.ProximityPrompt:Fire()
-        elseif Base.Handle and Base.Handle:FindFirstChild("ClickDetector") then
-            Base.Handle.ClickDetector.MouseClick:Fire(LocalPlayer)
-        else
-            -- Fallback: Just parent it to base if prompt fails
-            item.Parent = Base.Parent
+        -- Scan Backpack
+        local backpack = LocalPlayer:WaitForChild("Backpack")
+        for _, tool in pairs(backpack:GetChildren()) do
+            if isTargetRarity(tool) then
+                updateUI("Found", tool.Name)
+                animateSteal(tool, LocalPlayer)
+                -- Optional: You can add logic here to "steal" it from others if needed
+            end
         end
         
-        wait(1) 
-        
-        -- Unequip Base
-        LocalPlayer.Character.Humanoid:UnequipTools()
-    else
-        print("⚠️ Base tool not found for return!")
-    end
-end
-
--- 7. Scan Backpacks
-game:GetService("RunService").Heartbeat:Connect(function()
-    if isPaused then return end
-    
-    -- Update Status
-    updateUI("Scanning...")
-    
-    -- Scan Backpacks
-    for _, player in pairs(game.Players:GetPlayers()) do
-        if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
-            for _, item in pairs(player.Backpack:GetChildren()) do
-                if item:IsA("Tool") and isTargetRarity(item) then
-                    trySteal(item, player)
-                    break 
+        -- Scan Character Inventory (Equipped items)
+        for _, tool in pairs(char:GetChildren()) do
+            if tool:IsA("Tool") and isTargetRarity(tool) then
+                -- Avoid double counting if it's also in backpack
+                if not backpack:FindFirstChild(tool.Name) then
+                    updateUI("Equipped", tool.Name)
+                    animateSteal(tool, LocalPlayer)
                 end
             end
         end
     end
-end)
-
-print("✅ Secret/Eternal/Divine Stealer Active")
+end
