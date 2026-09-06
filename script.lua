@@ -1,389 +1,253 @@
--- ==========================================
--- MOBILE EGG THIEF FOR DELTA
--- ==========================================
+--[[
+	Egg Thief v1.0 - Unified Module for Delta Environment
+	Author: NoTrack
+	Date: 2026-09-06
+	Description: Monitors egg spawns, prioritizes by rarity, tweens to collect, returns to base, and displays live status.
+]]
 
--- 1. CONFIGURATION & STATE
-local EggThief = {
-    Enabled = true,
-    KeyBind = Enum.KeyCode.T, -- Toggle UI
-    Cooldown = 2.0, -- Seconds between attempts
-    Speed = 30, -- Tween speed
-    HomePosition = Vector3.new(0, 10, 0), -- Set your safe home base here
-    
-    -- Rarity Tiers (Higher number = Higher Priority)
-    Rarities = {
-        ["Common"] = 1,
-        ["Uncommon"] = 2,
-        ["Rare"] = 3,
-        ["Epic"] = 4,
-        ["Legendary"] = 5,
-        ["Mythic"] = 6,
-        ["Cosmic"] = 7,
-        ["Secret"] = 8,
-        ["Eternal"] = 9,
-        ["Divine"] = 10
-    },
-    
-    -- Selection State (Default: All ON)
-    SelectedRarities = {
-        Common = true,
-        Uncommon = true,
-        Rare = true,
-        Epic = true,
-        Legendary = true,
-        Mythic = true,
-        Cosmic = true,
-        Secret = true,
-        Eternal = true,
-        Divine = true
-    },
-    
-    -- Stats
-    Stats = {
-        TotalSteals = 0,
-        StartTime = tick(),
-        CurrentTarget = "None",
-        LastSteal = ""
-    },
-    
-    -- Internal State
-    LockedTarget = nil,
-    LastAttemptTime = 0,
-    ScanQueue = {}, -- Stores recent spawns
-    UIVisible = true
+local EggThief = {}
+
+-- --- CONFIGURATION ---
+EggThief.Config = {
+    HomeCoordinate = Vector3.new(0, 10, 0), -- Base coordinate to return to
+    MoveSpeed = 20.0, -- Speed of tweening (studs/sec)
+    Cooldown = 5.0, -- Seconds between attempts
+    Keybind = Enum.KeyCode.T, -- Toggle UI keybind
+    RarityTiers = {
+        ["Secret"] = 1,
+        ["Eternal"] = 2,
+        ["Divine"] = 3,
+        ["Common"] = 4
+    }
 }
 
--- ==========================================
--- 2. CORE LOGIC: SCANNER & STEALER
--- ==========================================
+-- --- MODULE 1: EGG SCANNER ---
+local EggScanner = {}
+EggScanner.log = {}
 
--- Helper: Check if a specific rarity is enabled for stealing
-function EggThief:ShouldSteal(rarityName)
-    return EggThief.SelectedRarities[rarityName] or false
-end
-
--- Helper: Identify rarity from object name
-function EggThief:GetRarityFromName(objectName)
-    local name = string.upper(objectName)
-    for rarity, _ in pairs(EggThief.Rarities) do
-        if string.find(name, rarity) then
-            return rarity
-        end
-    end
-    return "Common" -- Default fallback
-end
-
--- Main Loop: Scans and Steals
-spawn(function()
-    while EggThief.Enabled do
-        -- 1. Get all valid egg-like objects in workspace
-        local eggs = {}
-        for _, obj in pairs(workspace:GetChildren()) do
-            if obj:IsA("BasePart") or obj:IsA("Model") then
-                local name = obj.Name or ""
-                local rarity = EggThief:GetRarityFromName(name)
-                if EggThief.Rarities[rarity] then
+function EggScanner:ScanForEggs()
+    local eggs = {}
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("BasePart") or obj:IsA("Model") then
+            local name = tostring(obj.Name)
+            for tier, priority in pairs(EggThief.Config.RarityTiers) do
+                if string.find(string.upper(name), tier) then
                     table.insert(eggs, {
-                        Instance = obj,
-                        Rarity = rarity,
-                        Tier = EggThief.Rarities[rarity]
+                        object = obj,
+                        name = name,
+                        tier = tier,
+                        priority = priority,
+                        position = obj:GetPrimaryPartCFrame().Position
                     })
                 end
             end
         end
-
-        -- 2. Filter eggs based on user selection
-        local selectableEggs = {}
-        for _, egg in ipairs(eggs) do
-            if EggThief:ShouldSteal(egg.Rarity) then
-                table.insert(selectableEggs, egg)
-            end
-        end
-
-        -- 3. Find highest priority target
-        local bestTarget = nil
-        local maxTier = 0
-        
-        for _, egg in ipairs(selectableEggs) do
-            if egg.Tier > maxTier then
-                maxTier = egg.Tier
-                bestTarget = egg
-            elseif egg.Tier == maxTier then
-                -- Tie-breaker: Pick the closest one
-                local myPos = game.Players.LocalPlayer.Character.HumanoidRootPart.Position
-                local targetPos = egg.Instance.Position
-                local distBest = (bestTarget.Instance.Position - myPos).Magnitude
-                local distCurrent = (targetPos - myPos).Magnitude
-                if distCurrent < distBest then
-                    bestTarget = egg
-                end
-            end
-        end
-
-        -- 4. Execute Steal if Target Found and Cooldown Passed
-        if bestTarget and tick() - EggThief.LastAttemptTime >= EggThief.Cooldown then
-            EggThief.LockedTarget = bestTarget
-            EggThief.Stats.CurrentTarget = bestTarget.Rarity
-            
-            -- Move to target
-            local char = game.Players.LocalPlayer.Character
-            if char and char:FindFirstChild("HumanoidRootPart") then
-                local root = char.HumanoidRootPart
-                
-                -- Simple pathfinding/tweening
-                local tweenService = game:GetService("TweenService")
-                local info = TweenInfo.new(
-                    (root.Position - bestTarget.Instance.Position).Magnitude / EggThief.Speed,
-                    Enum.EasingStyle.Linear,
-                    Enum.EasingDirection.Out
-                )
-                local goal = TweenGoal.new({Position = bestTarget.Instance.Position})
-                local tween = tweenService:Create(root, info, goal)
-                
-                tween:Play()
-                tween.Completed:Wait()
-                
-                -- "Steal" logic (Destroy or Capture)
-                if bestTarget.Instance and bestTarget.Instance.Parent then
-                    bestTarget.Instance:Destroy()
-                    EggThief.Stats.TotalSteals += 1
-                    EggThief.Stats.LastSteal = bestTarget.Rarity
-                    EggThief.LastAttemptTime = tick()
-                    
-                    -- Visual feedback
-                    print("[EGG THIEF] Stole: " .. bestTarget.Rarity)
-                end
-            end
-        else
-            EggThief.Stats.CurrentTarget = "Scanning..."
-        end
-        
-        wait(1) -- Scan every second
     end
-end)
+    -- Sort by priority (lowest number = highest priority)
+    table.sort(eggs, function(a, b) return a.priority < b.priority end)
+    return eggs
+end
 
--- ==========================================
--- 3. UI OVERLAY (Mobile Optimized)
--- ==========================================
+function EggScanner:LogSpawn(egg)
+    local timestamp = os.date("%Y-%m-%d %H:%M:%S")
+    local logEntry = {
+        timestamp = timestamp,
+        objectName = egg.name,
+        rarity = egg.tier,
+        entityID = egg.object,
+        coordinates = egg.position
+    }
+    table.insert(self.log, logEntry)
+    print("[SCANNER] New " .. egg.tier .. " Egg: " .. egg.name)
+    return logEntry
+end
 
-spawn(function()
-    -- Create ScreenGui
-    local ScreenGui = Instance.new("ScreenGui")
-    ScreenGui.Name = "EggThiefUI"
-    ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    ScreenGui.Parent = game.Players.LocalPlayer:WaitForChild("PlayerGui")
-    
-    -- Main Frame
-    local Frame = Instance.new("Frame")
-    Frame.Name = "MainFrame"
-    Frame.Size = UDim2.new(0, 280, 0, 450) -- Taller for list
-    Frame.Position = UDim2.new(0.5, -140, 0, 50)
-    Frame.BackgroundColor3 = Color3.fromRGB(15, 15, 25)
-    Frame.BorderSizePixel = 0
-    Frame.BackgroundTransparency = 0.1
-    Frame.Parent = ScreenGui
-    
-    -- Title Bar
-    local TitleBar = Instance.new("Frame")
-    TitleBar.Name = "TitleBar"
-    TitleBar.Size = UDim2.new(1, 0, 0, 35)
-    TitleBar.BackgroundColor3 = Color3.fromRGB(30, 30, 50)
-    TitleBar.BorderSizePixel = 0
-    TitleBar.Parent = Frame
-    
-    local TitleText = Instance.new("TextLabel")
-    TitleText.Name = "Title"
-    TitleText.Size = UDim2.new(1, -40, 1, 0)
-    TitleText.BackgroundTransparency = 1
-    TitleText.Text = "EGG THIEF"
-    TitleText.TextColor3 = Color3.fromRGB(0, 255, 255)
-    TitleText.Font = Enum.Font.GothamBold
-    TitleText.TextSize = 16
-    TitleText.Parent = TitleBar
-    
-    -- Close Button
-    local CloseBtn = Instance.new("TextButton")
-    CloseBtn.Name = "Close"
-    CloseBtn.Size = UDim2.new(0, 35, 0, 35)
-    CloseBtn.Position = UDim2.new(1, -35, 0, 0)
-    CloseBtn.BackgroundColor3 = Color3.fromRGB(80, 0, 0)
-    CloseBtn.Text = "X"
-    CloseBtn.TextColor3 = Color3.new(1, 1, 1)
-    CloseBtn.Font = Enum.Font.GothamBold
-    CloseBtn.Parent = TitleBar
-    
-    CloseBtn.MouseButton1Click:Connect(function()
-        ScreenGui.Enabled = not ScreenGui.Enabled
-    end)
-    
-    -- Dragging Logic
-    local dragging = false
-    local dragInput = nil
-    local dragStart = nil
-    local startPos = nil
-    
-    TitleBar.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = true
-            dragStart = input.Position
-            startPos = Frame.Position
-            input.Changed:Connect(function()
-                if input.UserInputState == Enum.UserInputState.End then
-                    dragging = false
-                end
-            end)
-        end
-    end)
-    
-    TitleBar.InputChanged:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
-            dragInput = input
-        end
-    end)
-    
-    game:GetService("UserInputService").InputChanged:Connect(function(input)
-        if input == dragInput and dragging then
-            local delta = input.Position - dragStart
-            Frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
-        end
-    end)
-    
-    -- ==========================================
-    -- RARITY TOGGLE LIST
-    -- ==========================================
-    
-    local ToggleFrame = Instance.new("ScrollingFrame")
-    ToggleFrame.Name = "ToggleFrame"
-    ToggleFrame.Size = UDim2.new(1, -10, 0, 200) -- Height for list
-    ToggleFrame.Position = UDim2.new(0, 5, 0, 45)
-    ToggleFrame.BackgroundTransparency = 0.8
-    ToggleFrame.BackgroundColor3 = Color3.fromRGB(10, 10, 15)
-    ToggleFrame.BorderSizePixel = 0
-    ToggleFrame.ScrollBarThickness = 4
-    ToggleFrame.Parent = Frame
-    
-    local Layout = Instance.new("UIListLayout")
-    Layout.Parent = ToggleFrame
-    Layout.Padding = UDim.new(0, 5)
-    Layout.FillDirection = Enum.FillDirection.Vertical
-    Layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-    
-    -- Create Buttons for Each Rarity
-    local rarityNames = {"Divine", "Eternal", "Secret", "Cosmic", "Mythic", "Legendary", "Epic", "Rare", "Uncommon", "Common"}
-    
-    for _, rarity in ipairs(rarityNames) do
-        local btn = Instance.new("TextButton")
-        btn.Name = "Btn_" .. rarity
-        btn.Size = UDim2.new(0.9, 0, 0, 25)
-        btn.BackgroundColor3 = Color3.fromRGB(40, 40, 60)
-        btn.Text = "[" .. rarity .. "] ON"
-        btn.TextColor3 = Color3.new(1, 1, 1)
-        btn.Font = Enum.Font.SourceSansBold
-        btn.TextSize = 12
-        btn.Parent = ToggleFrame
-        
-        btn.MouseButton1Click:Connect(function()
-            -- Toggle State
-            EggThief.SelectedRarities[rarity] = not EggThief.SelectedRarities[rarity]
-            
-            -- Update Button Text
-            if EggThief.SelectedRarities[rarity] then
-                btn.Text = "[" .. rarity .. "] ON"
-                btn.BackgroundColor3 = Color3.fromRGB(40, 100, 40) -- Green tint
-            else
-                btn.Text = "[" .. rarity .. "] OFF"
-                btn.BackgroundColor3 = Color3.fromRGB(60, 40, 40) -- Red tint
-            end
-        end)
-        
-        -- Touch support
-        btn.InputBegan:Connect(function(input)
-            if input.UserInputType == Enum.UserInputType.Touch then
-                btn.MouseButton1Click:Invoke()
-            end
-        end)
+-- --- MODULE 2: TWEEN PATHFINDER ---
+local TweenPathfinder = {}
+
+function TweenPathfinder:SetHomeCoordinate(coord)
+    EggThief.Config.HomeCoordinate = coord
+end
+
+function TweenPathfinder:TweenToTarget(targetEntity)
+    local player = game.Players.LocalPlayer
+    if not player then return false end
+    local character = player.Character or player.CharacterAdded:Wait()
+    local humanoid = character:FindFirstChild("Humanoid")
+    if not humanoid then return false end
+
+    local startPos = character:GetPrimaryPartCFrame().Position
+    local endPos = targetEntity.position
+
+    -- Obstacle Check via Raycast
+    local direction = (endPos - startPos).Unit * (endPos - startPos).Magnitude
+    local rayParams = RaycastParams.new()
+    rayParams.FilterDescendantsInstances = {character}
+    local result = workspace:Raycast(startPos, direction, rayParams)
+    if result then
+        print("[PATHFINDER] Obstacle detected. Skipping target.")
+        return false
     end
-    
-    -- ==========================================
-    -- STATS & FEED DISPLAY
-    -- ==========================================
-    
-    -- Status Label
-    local StatusLabel = Instance.new("TextLabel")
-    StatusLabel.Name = "StatusLabel"
-    StatusLabel.Size = UDim2.new(1, -10, 0, 20)
-    StatusLabel.Position = UDim2.new(0, 5, 0, 255)
-    StatusLabel.BackgroundTransparency = 0.5
-    StatusLabel.BackgroundColor3 = Color3.fromRGB(10, 10, 15)
-    StatusLabel.Text = "Target: None"
-    StatusLabel.TextColor3 = Color3.fromRGB(255, 165, 0)
-    StatusLabel.Font = Enum.Font.GothamBold
-    StatusLabel.TextSize = 12
-    StatusLabel.Parent = Frame
-    
-    -- Stats Label
-    local StatsLabel = Instance.new("TextLabel")
-    StatsLabel.Name = "StatsLabel"
-    StatsLabel.Size = UDim2.new(1, -10, 0, 20)
-    StatsLabel.Position = UDim2.new(0, 5, 0, 280)
-    StatsLabel.BackgroundTransparency = 0.5
-    StatsLabel.BackgroundColor3 = Color3.fromRGB(10, 10, 15)
-    StatsLabel.Text = "Steals: 0"
-    StatsLabel.TextColor3 = Color3.new(0, 1, 0)
-    StatsLabel.Font = Enum.SourceSans
-    StatsLabel.TextSize = 12
-    StatsLabel.Parent = Frame
-    
-    -- Log Feed (Last 5)
-    local FeedFrame = Instance.new("ScrollingFrame")
-    FeedFrame.Name = "FeedFrame"
-    FeedFrame.Size = UDim2.new(1, -10, 1, -310)
-    FeedFrame.Position = UDim2.new(0, 5, 0, 305)
-    FeedFrame.BackgroundTransparency = 0.8
-    FeedFrame.BackgroundColor3 = Color3.fromRGB(10, 10, 15)
-    FeedFrame.BorderSizePixel = 0
-    FeedFrame.ScrollBarThickness = 2
-    FeedFrame.Parent = Frame
-    
-    local FeedLayout = Instance.new("UIListLayout")
-    FeedLayout.Parent = FeedFrame
-    FeedLayout.SortOrder = Enum.SortOrder.LayoutOrder
-    
-    -- Update UI Loop
+
+    -- Tween to target
+    local tweenInfo = TweenInfo.new((endPos - startPos).Magnitude / EggThief.Config.MoveSpeed, Enum.EasingStyle.Linear)
+    local tween = TweenService:Create(character, tweenInfo, {Position = endPos})
+    tween:Play()
+    tween.Completed:Wait()
+
+    -- Return to home after success
+    self:TweenToHome()
+    return true
+end
+
+function TweenPathfinder:TweenToHome()
+    local player = game.Players.LocalPlayer
+    if not player then return false end
+    local character = player.Character or player.CharacterAdded:Wait()
+    local humanoid = character:FindFirstChild("Humanoid")
+    if not humanoid then return false end
+
+    local startPos = character:GetPrimaryPartCFrame().Position
+    local endPos = EggThief.Config.HomeCoordinate
+
+    local tweenInfo = TweenInfo.new((endPos - startPos).Magnitude / EggThief.Config.MoveSpeed, Enum.EasingStyle.Linear)
+    local tween = TweenService:Create(character, tweenInfo, {Position = endPos})
+    tween:Play()
+    tween.Completed:Wait()
+    return true
+end
+
+-- --- MODULE 3: PRIORITY STEALER ---
+local PriorityStealer = {}
+PriorityStealer.lastAttemptTime = 0
+PriorityStealer.lockedTarget = nil
+
+function PriorityStealer:StartStealLoop()
+    while true do
+        if os.time() - self.lastAttemptTime >= EggThief.Config.Cooldown then
+            local eggs = EggScanner:ScanForEggs()
+            if #eggs > 0 then
+                local target = eggs[1] -- Highest priority
+                self.lockedTarget = target
+                print("[STEALER] Targeting: " .. target.name .. " [" .. target.tier .. "]")
+                local success = TweenPathfinder:TweenToTarget(target)
+                if success then
+                    print("[STEALER] Success! Collected: " .. target.name)
+                    EggThief.stats.totalSteals += 1
+                    EggThief.stats[target.tier .. "Count"] += 1
+                else
+                    print("[STEALER] Failed to collect: " .. target.name)
+                end
+            end
+        end
+        wait(1.0) -- Check every second
+    end
+end
+
+-- --- MODULE 4: UI OVERLAY ---
+local UIOverlay = {}
+UIOverlay.visible = true
+
+function UIOverlay:CreatePanel()
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "EggThiefUI"
+    screenGui.ResetOnSpawn = false
+    screenGui.Parent = game.Players.LocalPlayer:WaitForChild("PlayerGui")
+
+    -- Labels
+    local label = Instance.new("TextLabel")
+    label.Name = "StatusLabel"
+    label.Text = "Egg Thief v1.0"
+    label.TextColor3 = Color3.new(1, 1, 1)
+    label.TextSize = 18
+    label.Position = UDim2.new(0, 10, 0, 10)
+    label.Size = UDim2.new(0, 200, 0, 30)
+    label.Parent = screenGui
+
+    local feedLabel = Instance.new("TextLabel")
+    feedLabel.Name = "ScanFeed"
+    feedLabel.Text = "Scanning..."
+    feedLabel.TextColor3 = Color3.new(0, 1, 1)
+    feedLabel.TextSize = 14
+    feedLabel.Position = UDim2.new(0, 10, 0, 50)
+    feedLabel.Size = UDim2.new(0, 200, 0, 150)
+    feedLabel.Parent = screenGui
+
+    local targetLabel = Instance.new("TextLabel")
+    targetLabel.Name = "TargetLabel"
+    targetLabel.Text = "Target: None"
+    targetLabel.TextColor3 = Color3.new(1, 0.5, 0)
+    targetLabel.TextSize = 14
+    targetLabel.Position = UDim2.new(0, 10, 0, 210)
+    targetLabel.Size = UDim2.new(0, 200, 0, 30)
+    targetLabel.Parent = screenGui
+
+    local statsLabel = Instance.new("TextLabel")
+    statsLabel.Name = "StatsLabel"
+    statsLabel.Text = "Stats: 0 Steals"
+    statsLabel.TextColor3 = Color3.new(0.5, 1, 0.5)
+    statsLabel.TextSize = 12
+    statsLabel.Position = UDim2.new(0, 10, 0, 250)
+    statsLabel.Size = UDim2.new(0, 200, 0, 50)
+    statsLabel.Parent = screenGui
+
+    -- Keybind Listener
+    game:GetService("UserInputService").InputBegan:Connect(function(input)
+        if input.KeyCode == EggThief.Config.Keybind then
+            UIOverlay.visible = not UIOverlay.visible
+            screenGui.Visible = UIOverlay.visible
+        end
+    end)
+
+    -- Update Loop
     spawn(function()
-        while wait(0.5) do
-            if ScreenGui.Enabled then
-                StatusLabel.Text = "Target: " .. EggThief.Stats.CurrentTarget
-                StatsLabel.Text = "Steals: " .. EggThief.Stats.TotalSteals
-                
-                -- Update Feed with last stolen item
-                local logText = "Last: " .. EggThief.Stats.LastSteal
-                if EggThief.Stats.LastSteal ~= "" then
-                    -- Clear old feed
-                    for _, child in ipairs(FeedFrame:GetChildren()) do
-                        if child:IsA("TextLabel") then
-                            child:Destroy()
-                        end
-                    end
-                    
-                    local newLog = Instance.new("TextLabel")
-                    newLog.Size = UDim2.new(1, 0, 0, 20)
-                    newLog.BackgroundTransparency = 0.5
-                    newLog.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
-                    newLog.Text = "[" .. os.date("%H:%M:%S") .. "] Stole: " .. EggThief.Stats.LastSteal
-                    newLog.TextColor3 = Color3.new(0, 1, 1)
-                    newLog.Font = Enum.Font.SourceMono
-                    newLog.TextSize = 10
-                    newLog.Parent = FeedFrame
+        while true do
+            if UIOverlay.visible then
+                -- Update Feed
+                local eggs = EggScanner:ScanForEggs()
+                local feedText = "Latest Spawns:\n"
+                for i = 1, math.min(5, #eggs) do
+                    feedText = feedText .. "[" .. eggs[i].tier .. "] " .. eggs[i].name .. "\n"
                 end
+                feedLabel.Text = feedText
+
+                -- Update Target
+                if PriorityStealer.lockedTarget then
+                    targetLabel.Text = "Target: " .. PriorityStealer.lockedTarget.name
+                else
+                    targetLabel.Text = "Target: None"
+                end
+
+                -- Update Stats
+                statsLabel.Text = string.format("Steals: %d | S:%d E:%d D:%d | Runtime: %ds", 
+                    EggThief.stats.totalSteals, 
+                    EggThief.stats.secretCount, 
+                    EggThief.stats.eternalCount, 
+                    EggThief.stats.divineCount, 
+                    os.time() - EggThief.stats.startTime)
             end
+            wait(1.0)
         end
     end)
-    
-    -- Keybind Toggle
-    game:GetService("UserInputService").InputBegan:Connect(function(input, gameProcessed)
-        if not gameProcessed and input.KeyCode == EggThief.KeyBind then
-            ScreenGui.Enabled = not ScreenGui.Enabled
-        end
+end
+
+-- --- INITIALIZATION ---
+EggThief.stats = {
+    totalSteals = 0,
+    secretCount = 0,
+    eternalCount = 0,
+    divineCount = 0,
+    startTime = os.time()
+}
+
+function EggThief:Initialize()
+    TweenPathfinder:SetHomeCoordinate(EggThief.Config.HomeCoordinate)
+    UIOverlay:CreatePanel()
+    spawn(function()
+        PriorityStealer:StartStealLoop()
     end)
-end)
+    print("[EGG THIEF] Initialized. Press " .. EggThief.Config.Keybind.Name .. " to toggle UI.")
+end
+
+-- Run Initialization
+EggThief:Initialize()
